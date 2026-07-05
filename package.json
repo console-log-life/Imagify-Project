@@ -24,5 +24,8 @@
   "homepage": "https://github.com/Apeksha-22/Imagify-Project#readme",
   "devDependencies": {
     "concurrently": "^9.1.2"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2"
   }
 }
