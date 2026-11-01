@@ -1,202 +1,129 @@
-# 🎨 Imagify | AI-Powered Image Generation
+# Imagify | Text-to-Image Generation with Credits
 
-Imagify is an AI-powered image generation platform that transforms simple text prompts into high-quality AI-generated images. Built using a modern full-stack architecture, the application enables users to create realistic, artistic, and creative visuals within seconds through an intuitive and responsive interface.
+Imagify turns a text prompt into an image. Users sign up, get 5 free credits, spend one credit per image, and can buy more credits through Razorpay.
 
-🔗 **Live Demo:** https://imagify-project-phi.vercel.app
+**Live demo:** https://imagify-project-phi.vercel.app
 
----
+## Features
 
-## ✨ Features
+- Text-to-image generation through the [ClipDrop](https://clipdrop.co/apis) text-to-image API
+- Email and password accounts: passwords hashed with bcrypt, sessions as JWTs that expire (7 days by default)
+- Credit system: 5 free credits on sign-up, 1 credit per image, credit refunded if generation fails
+- Credit packs paid in INR through Razorpay, with HMAC signature verification of every payment
+- Download the generated image
 
-- 🖼️ Generate high-quality AI images from text prompts
-- ⚡ Fast image generation with optimized API requests
-- 🎯 Clean and user-friendly interface
-- 📥 Download generated images
-- 📱 Fully responsive design for desktop and mobile
-- 🔄 Real-time image generation experience
+## Tech stack
 
----
+| Part | Technology |
+| --- | --- |
+| Frontend | React 18, Vite, React Router, Tailwind CSS, Motion, Axios |
+| Backend | Node.js, Express, Mongoose |
+| Database | MongoDB |
+| Auth | bcrypt, JSON Web Tokens |
+| Payments | Razorpay Orders API |
+| Image generation | ClipDrop text-to-image API |
+| Tests | Node.js test runner, Supertest |
 
-## 🛠️ Tech Stack
+## How the credit and payment logic stays correct
 
-### Frontend
-- React.js
-- HTML5
-- CSS3 / Tailwind CSS *(Update if required)*
-- Axios
+**Spending credits.** A generate request reserves its credit with one atomic MongoDB update:
 
-### Backend
-- Node.js
-- Express.js
-- REST API
+```js
+userModel.findOneAndUpdate(
+  { _id: userId, creditBalance: { $gt: 0 } },
+  { $inc: { creditBalance: -1 } }
+)
+```
 
-### AI Integration
-- *(Replace with the AI model/API you used, e.g. ClipDrop API, OpenAI DALL·E, Stability AI, Replicate, etc.)*
+The filter only matches while the balance is above zero, so parallel requests can never spend more credits than the user has. If ClipDrop fails, the credit is given back.
 
-### Deployment
-- **Frontend:** Vercel
-- **Backend:** *(Replace with Render, Railway, or your hosting platform if applicable.)*
+**Buying credits.** The server sets the price for each plan; the client only sends a plan id. After checkout, `/verify-razor` checks the Razorpay HMAC signature, confirms the order is paid, checks that the payment belongs to the logged-in user, and then marks the transaction paid with an atomic update on `{ payment: false }`. A duplicated or replayed callback therefore adds credits only once.
 
----
+**Other safeguards.** Prompt length is limited to 1000 characters, image and login requests are rate limited, login gives the same error for an unknown email and a wrong password, and CORS can be restricted to the frontend origin.
 
-## 📂 Project Structure
+## API
+
+| Method | Route | Auth | Purpose |
+| --- | --- | --- | --- |
+| POST | `/api/user/register` | No | Create an account |
+| POST | `/api/user/login` | No | Log in |
+| GET | `/api/user/credits` | Yes | Current credit balance |
+| POST | `/api/user/pay-razor` | Yes | Create a Razorpay order for a plan |
+| POST | `/api/user/verify-razor` | Yes | Verify a payment and add credits |
+| POST | `/api/image/generate-image` | Yes | Generate an image from a prompt |
+
+Authenticated routes expect `Authorization: Bearer <token>`.
+
+## Project structure
 
 ```
 Imagify-Project/
-│
-├── client/
-│   ├── public/
-│   ├── src/
-│   ├── package.json
-│   └── ...
-│
-├── server/
-│   ├── routes/
-│   ├── controllers/
-│   ├── middleware/
-│   ├── package.json
-│   └── ...
-│
-├── README.md
-└── ...
+├── client/              React frontend (Vite)
+│   └── src/
+│       ├── components/  UI sections, login modal, navbar
+│       ├── context/     AppContext: auth state, credits, API calls
+│       └── pages/       Home, Result (generate), BuyCredit
+└── server/              Express API
+    ├── app.js           Express app (routes, CORS, JSON parsing)
+    ├── server.js        Connects to MongoDB, then starts the app
+    ├── controllers/     image and user/payment handlers
+    ├── middlewares/     JWT auth, rate limiting
+    ├── model/           Mongoose models: user, transaction
+    └── tests/           API tests
 ```
 
----
+## Run locally
 
-## 🚀 Getting Started
-
-### Prerequisites
-
-Before running the project, make sure you have:
-
-- Node.js (v16 or above)
-- npm or yarn
-- AI Image Generation API Key
-
----
-
-## ⚙️ Installation
-
-### Clone the Repository
+Requirements: Node.js 18+, a MongoDB database, a ClipDrop API key, and Razorpay test keys.
 
 ```bash
 git clone https://github.com/console-log-life/Imagify-Project.git
-```
-
-Move into the project directory:
-
-```bash
 cd Imagify-Project
-```
 
----
+# Backend
+cd server
+cp .env.example .env      # fill in the values
+npm install
+npm run dev               # http://localhost:4000
 
-### Install Frontend Dependencies
-
-```bash
+# Frontend (new terminal)
 cd client
+cp .env.example .env      # VITE_BACKEND_URL and VITE_RAZORPAY_KEY_ID
 npm install
+npm run dev               # http://localhost:5173
 ```
 
----
+### Environment variables
 
-### Install Backend Dependencies
+`server/.env`
 
-```bash
-cd ../server
-npm install
-```
+| Variable | Description |
+| --- | --- |
+| `MONGODB_URI` | MongoDB connection string |
+| `JWT_SECRET` | Secret used to sign tokens |
+| `JWT_EXPIRES_IN` | Token lifetime, optional (default `7d`) |
+| `CLIPDROP_API` | ClipDrop API key |
+| `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` | Razorpay API keys |
+| `CLIENT_URL` | Allowed frontend origin(s) for CORS, comma separated; leave empty locally |
+| `PORT` | API port (default 4000) |
 
----
+`client/.env`
 
-## 🔑 Environment Variables
+| Variable | Description |
+| --- | --- |
+| `VITE_BACKEND_URL` | Backend URL |
+| `VITE_RAZORPAY_KEY_ID` | Razorpay key id (public) |
 
-Create a `.env` file inside the **server** folder.
-
-Example:
-
-```env
-PORT=5000
-
-API_KEY=your_ai_api_key_here
-```
-
-If your project requires additional environment variables, add them here as well.
-
----
-
-## ▶️ Running the Project
-
-### Start Backend
+## Tests
 
 ```bash
 cd server
-npm start
+npm test
 ```
 
-### Start Frontend
+The tests run against in-memory stand-ins for the database, so they need no MongoDB, ClipDrop or Razorpay account. They cover authentication, one credit per image, parallel requests not overspending credits, refunds on provider failure, forged payment signatures, duplicated payment callbacks, and payments redeemed by the wrong user.
 
-Open another terminal:
+## Known limitations
 
-```bash
-cd client
-npm start
-```
-
-The application should now be running locally.
-
----
-
-## 🌟 Future Improvements
-
-- Image history
-- User authentication
-- Prompt enhancement using AI
-- Multiple image styles
-- Image editing and variations
-- Favorite and download history
-
----
-
-## 🤝 Contributing
-
-Contributions are welcome.
-
-1. Fork the repository.
-2. Create a new branch.
-
-```bash
-git checkout -b feature-name
-```
-
-3. Commit your changes.
-
-```bash
-git commit -m "Added new feature"
-```
-
-4. Push to GitHub.
-
-```bash
-git push origin feature-name
-```
-
-5. Open a Pull Request.
-
----
-
-## 📄 License
-
-This project is licensed under the MIT License.
-
----
-
-## 👩‍💻 Author
-
-**Apeksha**
-
-GitHub: https://github.com/console-log-life
-
----
-
-⭐ If you found this project useful, consider giving it a star on GitHub!
+- Generated images are returned to the browser and not stored, so there is no image history.
+- The rate limiter keeps counts in memory, so limits are per server instance.
