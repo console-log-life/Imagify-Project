@@ -12,6 +12,7 @@ const BuyCredit = () => {
 
   // Load Razorpay script
   const loadRazorpayScript = () => {
+    if (window.Razorpay) return Promise.resolve(true)
     return new Promise((resolve) => {
       const script = document.createElement('script')
       script.src = 'https://checkout.razorpay.com/v1/checkout.js'
@@ -141,7 +142,7 @@ const BuyCredit = () => {
             <p className='mt-3 mb-1 font-semibold'>{item.id}</p>
             <p className='text-sm'>{item.desc}</p>
             <p className='mt-6'>
-              <span className='font-medium text-3xl'>${item.price}</span> / {item.credits} credits
+              <span className='font-medium text-3xl'>₹{item.price}</span> / {item.credits} credits
             </p>
             <button 
               onClick={() => paymentrazorpay(item.id)} 

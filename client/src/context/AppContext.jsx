@@ -15,17 +15,19 @@ const AppContextProvider = (props) => {
     const backendUrl = import.meta.env.VITE_BACKEND_URL;
     const navigate = useNavigate();
 
-    // Configure axios defaults
-    axios.defaults.baseURL = backendUrl;
-
-    // Add axios interceptor for token
-    axios.interceptors.request.use((config) => {
-        const currentToken = localStorage.getItem('token');
-        if (currentToken) {
-            config.headers.Authorization = `Bearer ${currentToken}`;
-        }
-        return config;
-    });
+    // Configure axios once. Registering the interceptor in the component body
+    // added a new interceptor on every render; this registers one and removes it on unmount.
+    useEffect(() => {
+        axios.defaults.baseURL = backendUrl;
+        const interceptorId = axios.interceptors.request.use((config) => {
+            const currentToken = localStorage.getItem('token');
+            if (currentToken) {
+                config.headers.Authorization = `Bearer ${currentToken}`;
+            }
+            return config;
+        });
+        return () => axios.interceptors.request.eject(interceptorId);
+    }, [backendUrl]);
 
     const loadCreditsData = async (showError = true) => {
         try {
@@ -59,30 +61,26 @@ const AppContextProvider = (props) => {
                 setShowLogin(true);
                 return;
             }
-            
+
             setLoading(true);
-            const { data } = await axios.post('/api/image/generate-image', { 
-                prompt,
-                userId: user._id 
-            });
-            
-            if (data.success) {
-                await loadCreditsData(false);
-                return data.resultImage;
-            } else {
-                toast.error(data.message);
-                await loadCreditsData(false);
-                if (data.creditBalance === 0) {
-                    navigate('/buy');
-                }
-            }
+            const { data } = await axios.post('/api/image/generate-image', { prompt });
+            setCredit(data.creditBalance);
+            return data.resultImage;
         } catch (error) {
             console.error('Image generation error:', error);
-            if (error.response?.status === 401) {
+            const status = error.response?.status;
+            if (status === 401) {
                 silentLogout();
                 setShowLogin(true);
+            } else if (status === 402) {
+                toast.error('You are out of credits');
+                setCredit(0);
+                navigate('/buy');
             } else {
                 toast.error(error.response?.data?.message || 'Failed to generate image');
+                if (typeof error.response?.data?.creditBalance === 'number') {
+                    setCredit(error.response.data.creditBalance);
+                }
             }
         } finally {
             setLoading(false);
