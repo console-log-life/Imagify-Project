@@ -37,8 +37,8 @@ const connectDB = async () => {
     } catch (error) {
         console.error('Error connecting to MongoDB:', error.message);
         
-        // Check if using MongoDB Atlas
-        if (process.env.MONGODB_URI.includes('mongodb+srv')) {
+        // Check if using MongoDB Atlas (MONGODB_URI may be missing entirely)
+        if (process.env.MONGODB_URI?.includes('mongodb+srv')) {
             console.error('\nMongoDB Atlas Connection Error. Please check:');
             console.error('1. Your MongoDB Atlas cluster is running');
             console.error('2. Your IP address is whitelisted in MongoDB Atlas');
@@ -46,7 +46,7 @@ const connectDB = async () => {
             console.error('4. Your cluster URL is correct');
             console.error('\nTry using a local MongoDB connection for testing:');
             console.error('MONGODB_URI=mongodb://localhost:27017/imagify');
-        } else {
+        } else if (process.env.MONGODB_URI) {
             console.error('\nLocal MongoDB Connection Error. Please check:');
             console.error('1. MongoDB is installed and running locally');
             console.error('2. The port 27017 is available');

@@ -2,38 +2,83 @@ import userModel from "../model/usermodel.js";
 import FormData from 'form-data';
 import axios from "axios"
 
-export const generateImage = async(req, res)=>{
-    try {
-        const userId = req.user.id
-        const {prompt} = req.body
-        const user = await userModel.findById(userId);
+export const MAX_PROMPT_LENGTH = 1000;
 
-        if(!user || !prompt){
-            return res.json({success:false, message:"Missing Details"})
-        }
-
-        if(user.creditBalance === 0 || user.creditBalance < 0){
-            return res.json({success:false, message:"No Credit Balance",creditBalance:user.creditBalance})
-        }
-
+// Text-to-image provider. Kept on an object so tests can replace it.
+export const imageProvider = {
+    async textToImage(prompt) {
         const formData = new FormData()
-        formData.append('prompt',prompt)
+        formData.append('prompt', prompt)
 
-        const {data} = await axios.post('https://clipdrop-api.co/text-to-image/v1',formData,{
-            headers:{
-                'x-api-key':process.env.CLIPDROP_API,
-            },
-            responseType :'arraybuffer'
+        const { data } = await axios.post('https://clipdrop-api.co/text-to-image/v1', formData, {
+            headers: { 'x-api-key': process.env.CLIPDROP_API },
+            responseType: 'arraybuffer',
+            timeout: 60000
         })
+        return Buffer.from(data)
+    }
+}
 
-        const base64Image = Buffer.from(data,'binary').toString('base64')
-        const resultImage = `data:image/png;base64,${base64Image}`
+// ClipDrop returns errors as an arraybuffer, so decode them before showing.
+const providerErrorMessage = (error) => {
+    const body = error.response?.data
+    if (body) {
+        try {
+            const parsed = JSON.parse(Buffer.from(body).toString('utf8'))
+            if (parsed?.error) return parsed.error
+        } catch {
+            // not JSON; fall through to the generic message
+        }
+    }
+    return 'Image generation failed. Your credit has been refunded.'
+}
 
-        await userModel.findByIdAndUpdate(user._id,{creditBalance:user.creditBalance-1})
+export const generateImage = async (req, res) => {
+    const userId = req.user.id
+    const prompt = typeof req.body.prompt === 'string' ? req.body.prompt.trim() : ''
 
-        res.json({success:true,message:"Image Generated",creditBalance:user.creditBalance-1,resultImage})
+    if (!prompt) {
+        return res.status(400).json({ success: false, message: 'Please enter a prompt' })
+    }
+    if (prompt.length > MAX_PROMPT_LENGTH) {
+        return res.status(400).json({ success: false, message: `Prompt must be at most ${MAX_PROMPT_LENGTH} characters` })
+    }
+
+    // Reserve one credit atomically. The filter only matches while the balance is
+    // above zero, so concurrent requests can never spend more credits than exist.
+    let user
+    try {
+        user = await userModel.findOneAndUpdate(
+            { _id: userId, creditBalance: { $gt: 0 } },
+            { $inc: { creditBalance: -1 } },
+            { new: true }
+        )
     } catch (error) {
-        console.log(error);
-        res.json({success:false,message:error.message})
+        console.error('Credit reservation error:', error)
+        return res.status(500).json({ success: false, message: 'Could not start image generation' })
+    }
+
+    if (!user) {
+        const exists = await userModel.exists({ _id: userId })
+        if (!exists) {
+            return res.status(404).json({ success: false, message: 'User not found' })
+        }
+        return res.status(402).json({ success: false, message: 'No Credit Balance', creditBalance: 0 })
+    }
+
+    try {
+        const image = await imageProvider.textToImage(prompt)
+        const resultImage = `data:image/png;base64,${image.toString('base64')}`
+        return res.json({ success: true, message: 'Image Generated', creditBalance: user.creditBalance, resultImage })
+    } catch (error) {
+        console.error('Image provider error:', error.message)
+        // Give the reserved credit back, since the user got no image.
+        await userModel.updateOne({ _id: userId }, { $inc: { creditBalance: 1 } })
+            .catch((refundError) => console.error('Credit refund failed:', refundError))
+        return res.status(502).json({
+            success: false,
+            message: providerErrorMessage(error),
+            creditBalance: user.creditBalance + 1
+        })
     }
 }
