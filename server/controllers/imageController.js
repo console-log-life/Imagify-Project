@@ -4,32 +4,56 @@ import axios from "axios"
 
 export const MAX_PROMPT_LENGTH = 1000;
 
-// Text-to-image provider. Kept on an object so tests can replace it.
+// Text-to-image providers. Cloudflare Workers AI (FLUX.1 schnell) is used when
+// its credentials are set, because its free plan covers roughly 170 images a
+// day. ClipDrop is kept as the fallback. Both return { data: Buffer, mimeType }.
+const cloudflare = async (prompt) => {
+    const url = `https://api.cloudflare.com/client/v4/accounts/${process.env.CF_ACCOUNT_ID}/ai/run/@cf/black-forest-labs/flux-1-schnell`
+    const { data } = await axios.post(url, { prompt, steps: 4 }, {
+        headers: { Authorization: `Bearer ${process.env.CF_API_TOKEN}` },
+        timeout: 60000
+    })
+    if (!data?.result?.image) {
+        throw new Error('Cloudflare response had no image')
+    }
+    return { data: Buffer.from(data.result.image, 'base64'), mimeType: 'image/jpeg' }
+}
+
+const clipdrop = async (prompt) => {
+    const formData = new FormData()
+    formData.append('prompt', prompt)
+
+    const { data } = await axios.post('https://clipdrop-api.co/text-to-image/v1', formData, {
+        headers: { 'x-api-key': process.env.CLIPDROP_API },
+        responseType: 'arraybuffer',
+        timeout: 60000
+    })
+    return { data: Buffer.from(data), mimeType: 'image/png' }
+}
+
+// Kept on an object so tests can replace it.
 export const imageProvider = {
     async textToImage(prompt) {
-        const formData = new FormData()
-        formData.append('prompt', prompt)
-
-        const { data } = await axios.post('https://clipdrop-api.co/text-to-image/v1', formData, {
-            headers: { 'x-api-key': process.env.CLIPDROP_API },
-            responseType: 'arraybuffer',
-            timeout: 60000
-        })
-        return Buffer.from(data)
+        if (process.env.CF_ACCOUNT_ID && process.env.CF_API_TOKEN) {
+            return cloudflare(prompt)
+        }
+        return clipdrop(prompt)
     }
 }
 
-// ClipDrop returns errors as an arraybuffer, so decode them before using them.
+// Pull a readable error out of a provider response. ClipDrop sends errors as an
+// arraybuffer; Cloudflare sends JSON with an errors array.
 const providerErrorDetail = (error) => {
-    const body = error.response?.data
-    if (body) {
+    let body = error.response?.data
+    if (body && (Buffer.isBuffer(body) || body instanceof ArrayBuffer)) {
         try {
-            const parsed = JSON.parse(Buffer.from(body).toString('utf8'))
-            if (parsed?.error) return String(parsed.error)
+            body = JSON.parse(Buffer.from(body).toString('utf8'))
         } catch {
-            // not JSON
+            body = null
         }
     }
+    if (body?.error) return String(body.error)
+    if (Array.isArray(body?.errors) && body.errors[0]?.message) return String(body.errors[0].message)
     return error.message
 }
 
@@ -79,7 +103,7 @@ export const generateImage = async (req, res) => {
 
     try {
         const image = await imageProvider.textToImage(prompt)
-        const resultImage = `data:image/png;base64,${image.toString('base64')}`
+        const resultImage = `data:${image.mimeType};base64,${image.data.toString('base64')}`
         return res.json({ success: true, message: 'Image Generated', creditBalance: user.creditBalance, resultImage })
     } catch (error) {
         console.error('Image provider error:', error.response?.status, providerErrorDetail(error))

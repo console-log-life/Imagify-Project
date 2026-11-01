@@ -6,7 +6,7 @@ Imagify turns a text prompt into an image. Users sign up, get 5 free credits, sp
 
 ## Features
 
-- Text-to-image generation through the [ClipDrop](https://clipdrop.co/apis) text-to-image API
+- Text-to-image generation with FLUX.1 [schnell] on [Cloudflare Workers AI](https://developers.cloudflare.com/workers-ai/) (free plan), with the [ClipDrop](https://clipdrop.co/apis) API as a fallback
 - Email and password accounts: passwords hashed with bcrypt, sessions as JWTs that expire (7 days by default)
 - Credit system: 5 free credits on sign-up, 1 credit per image, credit refunded if generation fails
 - Credit packs paid in INR through Razorpay, with HMAC signature verification of every payment
@@ -21,7 +21,7 @@ Imagify turns a text prompt into an image. Users sign up, get 5 free credits, sp
 | Database | MongoDB |
 | Auth | bcrypt, JSON Web Tokens |
 | Payments | Razorpay Orders API |
-| Image generation | ClipDrop text-to-image API |
+| Image generation | Cloudflare Workers AI (FLUX.1 schnell), ClipDrop as fallback |
 | Tests | Node.js test runner, Supertest |
 
 ## How the credit and payment logic stays correct
@@ -35,7 +35,7 @@ userModel.findOneAndUpdate(
 )
 ```
 
-The filter only matches while the balance is above zero, so parallel requests can never spend more credits than the user has. If ClipDrop fails, the credit is given back.
+The filter only matches while the balance is above zero, so parallel requests can never spend more credits than the user has. If the image provider fails, the credit is given back, and provider account errors (such as the provider's own quota running out) are logged on the server instead of being shown to users.
 
 **Buying credits.** The server sets the price for each plan; the client only sends a plan id. After checkout, `/verify-razor` checks the Razorpay HMAC signature, confirms the order is paid, checks that the payment belongs to the logged-in user, and then marks the transaction paid with an atomic update on `{ payment: false }`. A duplicated or replayed callback therefore adds credits only once.
 
@@ -74,7 +74,7 @@ Imagify-Project/
 
 ## Run locally
 
-Requirements: Node.js 18+, a MongoDB database, a ClipDrop API key, and Razorpay test keys.
+Requirements: Node.js 18+, a MongoDB database, a free Cloudflare account (Workers AI), and Razorpay test keys.
 
 ```bash
 git clone https://github.com/console-log-life/Imagify-Project.git
@@ -102,7 +102,8 @@ npm run dev               # http://localhost:5173
 | `MONGODB_URI` | MongoDB connection string |
 | `JWT_SECRET` | Secret used to sign tokens |
 | `JWT_EXPIRES_IN` | Token lifetime, optional (default `7d`) |
-| `CLIPDROP_API` | ClipDrop API key |
+| `CF_ACCOUNT_ID`, `CF_API_TOKEN` | Cloudflare account ID and a Workers AI API token. When both are set, images come from Workers AI |
+| `CLIPDROP_API` | ClipDrop API key, used only when the Cloudflare values are empty |
 | `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` | Razorpay API keys |
 | `CLIENT_URL` | Allowed frontend origin(s) for CORS, comma separated; leave empty locally |
 | `PORT` | API port (default 4000) |
@@ -121,9 +122,10 @@ cd server
 npm test
 ```
 
-The tests run against in-memory stand-ins for the database, so they need no MongoDB, ClipDrop or Razorpay account. They cover authentication, one credit per image, parallel requests not overspending credits, refunds on provider failure, forged payment signatures, duplicated payment callbacks, and payments redeemed by the wrong user.
+The tests run against in-memory stand-ins for the database, so they need no MongoDB, Cloudflare, ClipDrop or Razorpay account. They cover authentication, one credit per image, parallel requests not overspending credits, refunds on provider failure, provider selection, forged payment signatures, duplicated payment callbacks, and payments redeemed by the wrong user.
 
 ## Known limitations
 
 - Generated images are returned to the browser and not stored, so there is no image history.
+- The Cloudflare free plan allows about 10,000 neurons a day (roughly 170 images at the default settings); after that, generation fails and credits are refunded until the next day.
 - The rate limiter keeps counts in memory, so limits are per server instance.

@@ -12,7 +12,7 @@ beforeEach(() => {
   imageProvider.textToImage = async () => {
     providerCalls += 1;
     await new Promise((r) => setTimeout(r, 20)); // simulate network latency
-    return Buffer.from('png-bytes');
+    return { data: Buffer.from('png-bytes'), mimeType: 'image/png' };
   };
 });
 
