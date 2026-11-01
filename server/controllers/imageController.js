@@ -19,18 +19,29 @@ export const imageProvider = {
     }
 }
 
-// ClipDrop returns errors as an arraybuffer, so decode them before showing.
-const providerErrorMessage = (error) => {
+// ClipDrop returns errors as an arraybuffer, so decode them before using them.
+const providerErrorDetail = (error) => {
     const body = error.response?.data
     if (body) {
         try {
             const parsed = JSON.parse(Buffer.from(body).toString('utf8'))
-            if (parsed?.error) return parsed.error
+            if (parsed?.error) return String(parsed.error)
         } catch {
-            // not JSON; fall through to the generic message
+            // not JSON
         }
     }
-    return 'Image generation failed. Your credit has been refunded.'
+    return error.message
+}
+
+// Message shown to the user. Only a 400 (a problem with the prompt itself) is
+// passed through. Account-side errors such as the provider's own credits running
+// out (402) or a bad API key (401/403) would confuse users, because they refer
+// to the app's ClipDrop account, not the user's Imagify credits.
+const providerErrorMessage = (error) => {
+    if (error.response?.status === 400) {
+        return `${providerErrorDetail(error)}. Your credit has been refunded.`
+    }
+    return 'The image service is unavailable right now. Your credit has been refunded, please try again later.'
 }
 
 export const generateImage = async (req, res) => {
@@ -71,7 +82,7 @@ export const generateImage = async (req, res) => {
         const resultImage = `data:image/png;base64,${image.toString('base64')}`
         return res.json({ success: true, message: 'Image Generated', creditBalance: user.creditBalance, resultImage })
     } catch (error) {
-        console.error('Image provider error:', error.message)
+        console.error('Image provider error:', error.response?.status, providerErrorDetail(error))
         // Give the reserved credit back, since the user got no image.
         await userModel.updateOne({ _id: userId }, { $inc: { creditBalance: 1 } })
             .catch((refundError) => console.error('Credit refund failed:', refundError))

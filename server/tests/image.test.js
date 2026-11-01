@@ -65,3 +65,16 @@ test('rejects empty and over-long prompts without spending credits', async () =>
   assert.equal((await generate(user, 'a'.repeat(1001))).status, 400);
   assert.equal(db.users.get(user._id).creditBalance, 2);
 });
+
+test('does not show the provider\'s own billing error to the user', async () => {
+  imageProvider.textToImage = async () => {
+    const error = new Error('Request failed with status code 402');
+    error.response = { status: 402, data: Buffer.from(JSON.stringify({ error: 'Not enough credits to process the request' })) };
+    throw error;
+  };
+  const user = await addUser({ creditBalance: 5 });
+  const res = await generate(user);
+  assert.equal(res.status, 502);
+  assert.doesNotMatch(res.body.message, /not enough credits/i);
+  assert.equal(db.users.get(user._id).creditBalance, 5);
+});
